@@ -1,7 +1,6 @@
-use std::collections::VecDeque;
+use std::time::Instant;
+use rand::{thread_rng, prelude::SliceRandom};
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
 use crate::board::*;
 
 mod board;
@@ -11,9 +10,10 @@ const DEBUG: bool = false;
 struct Stats {
     turns: u32,
     winner: u32,
+    infinite: bool,
 }
 
-pub struct Summary {
+struct Summary {
     turns: Vec<u32>, // Number of turns for each game
     winners: Vec<u32>, // A player-sized vector counting how many wins each player has
 }
@@ -41,7 +41,7 @@ struct Player {
     stuck: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Tile {
     Start,
     Red,
@@ -58,39 +58,63 @@ pub enum Tile {
     End,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Card {
     tile: Tile,
     num: u32,
 }
 
-pub fn run_multiple(p: PlayerCount, num_games: u32) -> Summary {
+/// Calculate the stats from a given number of players/desired games
+/// If a deck is provided it will not be shuffled
+/// Otherwise, a randomly generated deck will be used
+pub fn calculate(p: PlayerCount, num_games: u32, deck: Option<Vec<Card>>) {
+    // Setup summary for runs
     let mut s = match p {
         PlayerCount::Two => Summary{turns: Vec::new(), winners: vec![0; 2]},
         PlayerCount::Three => Summary{turns: Vec::new(), winners: vec![0; 3]},
         PlayerCount::Four => Summary{turns: Vec::new(), winners: vec![0; 4]},
     };
-
+    
+    // Get current time and run the desired number of games
+    let now = Instant::now();
     for _ in 0..num_games {
-        let stats = run(&p);
+        let stats = play(&p, deck.clone());
+        if stats.infinite {
+            return;
+        }
         s.turns.push(stats.turns);
         *s.winners.get_mut((stats.winner - 1) as usize).unwrap() += 1;
     }
-    return s;
+    let elapsed = now.elapsed().as_millis() as f32/ 1000.0 ;
+    println!("Done! Ran {} game(s) in {:.3} s", num_games, elapsed);
+    print_summary(&s);
 }
 
-fn run(p: &PlayerCount) -> Stats {
+/// Play 1 round of CandyLand with the given number of players
+fn play(p: &PlayerCount, deck: Option<Vec<Card>>) -> Stats {
     // Setup players
     let mut players: Vec<Player> = Vec::new();
     for i in 0..p.value() {
         players.push(Player {order: i + 1, space: 0, stuck: false});
     }
 
-    let board = get_board();
-    let mut deck: VecDeque<Card> = make_deck();
-    let mut deck_string = write_deck(&deck); // Cache off deck just in case we're logging
+    // Setup deck
+    let allow_reshuffle: bool;
+    let mut d = if deck.is_none() {
+        allow_reshuffle = true;
+        make_deck()
+    } else {
+        allow_reshuffle = false;
+        deck.unwrap()
+    };
+    if allow_reshuffle {
+        d.shuffle(&mut thread_rng())
+    }
+    let deck_copy = d.clone(); // Cache off a deck for if/when we have to reshuffle
+    d.reverse(); // Deck order is reversed so we can pull from the end
 
     // Let's do that Candy Land
+    let board = get_board();
     let mut winner = 0;
     let mut num_turns = 0;
     let mut player_won = false;
@@ -99,23 +123,31 @@ fn run(p: &PlayerCount) -> Stats {
         for mut p in &mut players {
             num_turns += 1;
             if p.stuck {
+                if DEBUG {
+                    println!("Player #{} is stuck. Skipping turn...", p.order);
+                }
                 p.stuck = false;
                 continue;
             }
     
-            let c = match deck.pop_front() {
+            let c = match d.pop() {
                 Some(c) => c,
                 None => {
-                    if DEBUG {
-                        println!("Current deck required a reshuffle: {} (#{})", deck_string, reshuffle);
-                    }
                     reshuffle += 1;
-                    deck = make_deck();
-                    deck_string = write_deck(&deck);
-                    deck.pop_front().unwrap()
+                    d = deck_copy.clone();
+                    if allow_reshuffle {                        
+                        d.shuffle(&mut thread_rng());
+                    }
+                    d.reverse();
+                    d.pop().unwrap()
                 }
             };
-    
+            
+            if reshuffle >= 3 && !allow_reshuffle {
+                println!("Deck was an infinite loop: {}", write_deck(&deck_copy));
+                return Stats{turns: 0, winner: 0, infinite: true};
+            }
+
             move_player(&board, &mut p, c);
             if p.space == (board.len() - 1) {
                 if DEBUG {
@@ -130,10 +162,10 @@ fn run(p: &PlayerCount) -> Stats {
     if DEBUG {
         println!("Done! {} turns", num_turns);
     }
-    Stats{turns: num_turns, winner: winner}
+    Stats{turns: num_turns, winner: winner, infinite: false}
 }
 
-fn make_deck() -> VecDeque<Card> {
+fn make_deck() -> Vec<Card> {
     let mut c: Vec<Card> = Vec::new();
     for _ in 0..3 {
         c.push(Card {tile: Tile::Red, num: 1});
@@ -159,8 +191,56 @@ fn make_deck() -> VecDeque<Card> {
     c.push(Card {tile: Tile::Peppermint, num: 1});
     c.push(Card {tile: Tile::BonBon, num: 1});
 
-    c.shuffle(&mut thread_rng());
-    return VecDeque::from(c);
+    return c;
+}
+
+pub fn get_infinite_two_person_deck() -> Vec<Card> {
+    let mut c: Vec<Card> = Vec::new();
+    c.push(Card {tile: Tile::Peppermint, num: 1});
+    c.push(Card {tile: Tile::Gumdrop, num: 1});
+    c.push(Card {tile: Tile::Yellow, num: 1});
+    c.push(Card {tile: Tile::Purple, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 1});
+    c.push(Card {tile: Tile::Yellow, num: 1});
+    c.push(Card {tile: Tile::Orange, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 1});
+    c.push(Card {tile: Tile::Green, num: 1});
+    c.push(Card {tile: Tile::Orange, num: 1});
+    c.push(Card {tile: Tile::Red, num: 1});
+    c.push(Card {tile: Tile::Green, num: 1});
+    c.push(Card {tile: Tile::Purple, num: 1});
+    c.push(Card {tile: Tile::Red, num: 2});
+    c.push(Card {tile: Tile::Purple, num: 1});
+    c.push(Card {tile: Tile::Yellow, num: 1});
+    c.push(Card {tile: Tile::Yellow, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 2});
+    c.push(Card {tile: Tile::Orange, num: 2});
+    c.push(Card {tile: Tile::Orange, num: 2});
+    c.push(Card {tile: Tile::Red, num: 2});
+    c.push(Card {tile: Tile::Purple, num: 2});
+    c.push(Card {tile: Tile::Purple, num: 2});
+    c.push(Card {tile: Tile::Yellow, num: 2});
+    c.push(Card {tile: Tile::Yellow, num: 2});
+    c.push(Card {tile: Tile::BonBon, num: 1});
+    c.push(Card {tile: Tile::Orange, num: 1});
+    c.push(Card {tile: Tile::Green, num: 2});
+    c.push(Card {tile: Tile::Green, num: 2});
+    c.push(Card {tile: Tile::Red, num: 1});
+    c.push(Card {tile: Tile::Orange, num: 1});
+    c.push(Card {tile: Tile::Purple, num: 2});
+    c.push(Card {tile: Tile::Green, num: 2});
+    c.push(Card {tile: Tile::Yellow, num: 2});
+    c.push(Card {tile: Tile::Lollipop, num: 1});
+    c.push(Card {tile: Tile::Green, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 2});
+    c.push(Card {tile: Tile::Red, num: 1});
+    c.push(Card {tile: Tile::Orange, num: 2});
+    c.push(Card {tile: Tile::IceCreamCone, num: 1});
+    c.push(Card {tile: Tile::Green, num: 1});
+    c.push(Card {tile: Tile::Blue, num: 2});
+    c.push(Card {tile: Tile::Red, num: 2});
+    return c;
 }
 
 /// Decks are encoded with a single letter representing each card type.
@@ -172,7 +252,7 @@ fn make_deck() -> VecDeque<Card> {
 ///  - Lollipop as L
 ///  - Peppermint as E
 ///  - Bon Bon as N
-fn write_deck(cards: &VecDeque<Card>) -> String {
+fn write_deck(cards: &Vec<Card>) -> String {
     let mut s = String::new();
     for c in cards {
         let mut temp = match c.tile {
@@ -201,7 +281,7 @@ fn write_deck(cards: &VecDeque<Card>) -> String {
     return s;
 }
 
-pub fn print_summary(s: &Summary) {
+fn print_summary(s: &Summary) {
     let len = s.turns.len();
     let mut avg_turns: f32 = 0.0;
     for t in &s.turns {

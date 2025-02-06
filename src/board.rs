@@ -116,7 +116,7 @@ pub fn move_player(board: &Vec<Space>, player: &mut Player, card: Card) {
             let mut num = 0;
             loop {
                 num += 1;
-                match board.iter().skip(s + 1).position(|q| q.tile == card.tile) { // Skip 1 past the current space to avoid returning the same value
+                match board.iter().skip(s + 1).position(|q| q.tile == card.tile) { // Skip 1 past the current space to avoid returning the same value from the position call
                     Some(q) => {
                         s += q + 1; // Add the returned position value (+1) as it is relative to the amount skipped
                         if num >= card.num && !board.get(s).unwrap().player.get() {
@@ -136,6 +136,10 @@ pub fn move_player(board: &Vec<Space>, player: &mut Player, card: Card) {
     space.player.set(true);
     player.space = s;
     player.stuck = space.sticky;
+
+    if DEBUG && player.stuck {
+        println!("Player #{} landed on licorice and will be stuck their next turn.", player.order);
+    }
 
     if space.shortcut.is_some() {
         if DEBUG {
